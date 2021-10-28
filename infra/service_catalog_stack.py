@@ -97,14 +97,14 @@ class ServiceCatalogStack(cdk.Stack):
             "Portfolio",
             display_name=portfolio_name.value_as_string,
             provider_name=portfolio_owner.value_as_string,
-            description="Organization templates for MLOps Demo",
+            description="Organization templates for MLOps",
         )
 
         product = servicecatalog.CloudFormationProduct(
             self,
             "Product",
             owner=portfolio_owner.value_as_string,
-            product_name="Amazon SageMaker MLOps Demo",
+            product_name="Amazon SageMaker MLOps Workshop",
             product_versions=[
                 servicecatalog.CloudFormationProductVersion(
                     cloud_formation_template=servicecatalog.CloudFormationTemplate.from_asset(

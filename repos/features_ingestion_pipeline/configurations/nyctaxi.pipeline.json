@@ -1,0 +1,9 @@
+{
+    "code_file_path": "pipelines/feature_ingestion_pipeline.py",
+    "pipeline_name":"nyctaxi-preprocessing",
+    "pipeline_configuration":{
+        "flow_file_path":"configurations/nyctaxi.flow",
+        "feature_group_name":"nyctaxi"
+    }
+
+}

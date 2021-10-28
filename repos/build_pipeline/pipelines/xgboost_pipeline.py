@@ -18,6 +18,17 @@ from sagemaker.workflow.parameters import ParameterInteger, ParameterString
 from sagemaker.workflow.pipeline import Pipeline
 from sagemaker.workflow.step_collections import RegisterModel
 from sagemaker.workflow.steps import CacheConfig, ProcessingStep, TrainingStep
+from sagemaker.workflow.conditions import ConditionLessThanOrEqualTo
+from sagemaker.workflow.condition_step import (
+    ConditionStep,
+    JsonGet,
+)
+from sagemaker.lambda_helper import Lambda
+from sagemaker.workflow.lambda_step import (
+    LambdaOutput,
+    LambdaOutputTypeEnum,
+    LambdaStep,
+)
 from sagemaker.xgboost.estimator import XGBoost
 
 project_name = os.getenv("SAGEMAKER_PROJECT_NAME")
@@ -32,27 +43,26 @@ def create_pipeline(
     default_bucket = sagemaker_session.default_bucket()
     client = boto3.client("sagemaker")
 
-    customers_fg_name = kwargs["customers_fg_name"]
-    claims_fg_name = kwargs["claims_fg_name"]
+    nyctaxi_fg_name = kwargs["nyctaxi_fg_name"]
     create_dataset_script_path = kwargs["create_dataset_script_path"]
     prefix = kwargs["prefix"]
     model_entry_point = kwargs["model_entry_point"]
     model_package_group_name = kwargs["model_package_group_name"]
     model_package_group_name = f"{project_name}-{model_package_group_name}"
+    
+    evaluation_func_arn = kwargs["evaluation_func_arn"]
 
     label_name = kwargs["label_name"]
     features_names = kwargs["features_names"]
 
     training_columns = [label_name] + features_names
 
-    customer_fg = client.describe_feature_group(FeatureGroupName=customers_fg_name)
-    claims_fg = client.describe_feature_group(FeatureGroupName=claims_fg_name)
-    database_name = customer_fg["OfflineStoreConfig"]["DataCatalogConfig"]["Database"]
-    claims_table = claims_fg["OfflineStoreConfig"]["DataCatalogConfig"]["TableName"]
-    customers_table = customer_fg["OfflineStoreConfig"]["DataCatalogConfig"][
+    nyctaxi_fg = client.describe_feature_group(FeatureGroupName=nyctaxi_fg_name)
+    database_name = nyctaxi_fg["OfflineStoreConfig"]["DataCatalogConfig"]["Database"]
+    nyctaxi_table = nyctaxi_fg["OfflineStoreConfig"]["DataCatalogConfig"][
         "TableName"
     ]
-    catalog = customer_fg["OfflineStoreConfig"]["DataCatalogConfig"]["Catalog"]
+    catalog = nyctaxi_fg["OfflineStoreConfig"]["DataCatalogConfig"]["Catalog"]
 
     train_instance_param = ParameterString(
         name="TrainingInstance",
@@ -72,7 +82,7 @@ def create_pipeline(
         role=role,
         instance_type="ml.m5.xlarge",
         instance_count=1,
-        base_job_name=f"{prefix}/fraud-demo-create-dataset",
+        base_job_name=f"{prefix}/nyctaxi-demo-create-dataset",
         sagemaker_session=sagemaker_session,
     )
 
@@ -80,8 +90,7 @@ def create_pipeline(
 
     query_string = f"""
     SELECT DISTINCT {training_columns_string}
-        FROM "{claims_table}" claims LEFT JOIN "{customers_table}" customers
-        ON claims.policy_id = customers.policy_id
+        FROM "{nyctaxi_table}"
     """
     athena_data_path = "/opt/ml/processing/athena"
 
@@ -179,10 +188,14 @@ def create_pipeline(
     metric_uri = f"{prefix}/training_jobs/metrics_output/metrics.json"
 
     hyperparameters = {
-        "max_depth": "3",
+        "max_depth": "9",
         "eta": "0.2",
-        "objective": "binary:logistic",
+        "gamma": "4",
+        "min_child_weight": "300",
+        "subsample": "0.8",
+        "objective": "reg:squarederror",
         "num_round": "100",
+        "early_stopping_rounds": "10",
         "bucket": f"{default_bucket}",
         "object": f"{metric_uri}",
     }
@@ -211,70 +224,6 @@ def create_pipeline(
         },
     )
 
-    # instantiate the Clarify processor
-    clarify_processor = clarify.SageMakerClarifyProcessor(
-        role=role,
-        instance_count=1,
-        instance_type="ml.c5.xlarge",
-        sagemaker_session=sagemaker_session,
-    )
-
-    # Run bias metrics with clarify steps
-    pipeline_bias_output_path = (
-        f"s3://{default_bucket}/{prefix}/clarify-output/pipeline/bias"
-    )
-
-    # clarify configuration
-    bias_data_config = clarify.DataConfig(
-        s3_data_input_path=create_dataset_step.properties.ProcessingOutputConfig.Outputs[
-            "train_data"
-        ].S3Output.S3Uri,
-        s3_output_path=pipeline_bias_output_path,
-        label="fraud",
-        dataset_type="text/csv",
-    )
-
-    bias_config = clarify.BiasConfig(
-        label_values_or_threshold=[0],
-        facet_name="customer_gender_female",
-        facet_values_or_threshold=[1],
-    )
-
-    analysis_config = bias_data_config.get_config()
-    analysis_config.update(bias_config.get_config())
-    analysis_config["methods"] = {"pre_training_bias": {"methods": "all"}}
-
-    clarify_config_dir = pathlib.Path("config")
-    clarify_config_dir.mkdir(exist_ok=True)
-    with open(clarify_config_dir / "analysis_config.json", "w") as f:
-        json.dump(analysis_config, f)
-
-    clarify_step = ProcessingStep(
-        name="ClarifyProcessor",
-        processor=clarify_processor,
-        inputs=[
-            sagemaker.processing.ProcessingInput(
-                input_name="analysis_config",
-                source=f"{clarify_config_dir}/analysis_config.json",
-                destination="/opt/ml/processing/input/config",
-            ),
-            sagemaker.processing.ProcessingInput(
-                input_name="dataset",
-                source=create_dataset_step.properties.ProcessingOutputConfig.Outputs[
-                    "train_data"
-                ].S3Output.S3Uri,
-                destination="/opt/ml/processing/input/data",
-            ),
-        ],
-        outputs=[
-            sagemaker.processing.ProcessingOutput(
-                source="/opt/ml/processing/output/analysis.json",
-                destination=pipeline_bias_output_path,
-                output_name="analysis_result",
-            )
-        ],
-    )
-
     # Register Model step
     model_metrics = ModelMetrics(
         model_statistics=MetricsSource(
@@ -295,6 +244,46 @@ def create_pipeline(
         approval_status=model_approval_status,
         model_metrics=model_metrics,
     )
+    
+    # s3 = boto3.client('s3')
+    
+    # s3_object = s3.get_object(Bucket=default_bucket, Key=metric_uri)
+    # s3_metric_data = s3_object['Body'].read().decode('utf-8')
+    
+    # ##################################################################
+    # 1. LambdaStep: evaluate metrics
+    # ##################################################################
+    output_param_1 = LambdaOutput(
+        output_name="statusCode", output_type=LambdaOutputTypeEnum.String
+    )
+    output_param_2 = LambdaOutput(
+        output_name="body", output_type=LambdaOutputTypeEnum.Float
+    )
+
+    step_lambda = LambdaStep(
+        name="EvaluationLambda",
+        lambda_func=Lambda(function_arn=evaluation_func_arn),
+        inputs={
+            "bucket_name": default_bucket,
+            "key_name": metric_uri,
+        },
+        outputs=[output_param_1, output_param_2],
+    )
+
+    step_lambda.add_depends_on([train_step])
+    
+    # condition step for evaluating model quality and branching execution
+    cond_lte = ConditionLessThanOrEqualTo(
+        left=step_lambda.properties.Outputs["body"],
+        right=7.0,
+    )
+    
+    cond_step = ConditionStep(
+        name="CheckEvaluation",
+        conditions=[cond_lte],
+        if_steps=[register_step],
+        else_steps=[],
+    )
 
     # pipeline instance
     pipeline = Pipeline(
@@ -308,8 +297,8 @@ def create_pipeline(
             create_dataset_step,
             baseline_step,
             train_step,
-            clarify_step,
-            register_step,
+            step_lambda,
+            cond_step,
         ],
         sagemaker_session=sagemaker_session,
     )

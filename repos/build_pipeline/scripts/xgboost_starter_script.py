@@ -17,6 +17,9 @@ if __name__ == "__main__":
     parser.add_argument("--objective", type=str, default="binary:logistic")
     parser.add_argument("--nfold", type=int, default=5)
     parser.add_argument("--early_stopping_rounds", type=int, default=10)
+    parser.add_argument("--gamma", type=int, default=4)
+    parser.add_argument("--min_child_weight", type=int, default=300)
+    parser.add_argument("--subsample", type=float, default=0.8)
     parser.add_argument(
         "--train_data_path", type=str, default=os.environ.get("SM_CHANNEL_TRAIN")
     )
@@ -34,11 +37,11 @@ if __name__ == "__main__":
     s3_client = boto3.client("s3")
 
     data = pd.read_csv(f"{args.train_data_path}/train.csv")
-    train = data.drop("fraud", axis=1)
-    label = pd.DataFrame(data["fraud"])
+    train = data.drop("fare_amount", axis=1)
+    label = pd.DataFrame(data["fare_amount"])
     dtrain = xgb.DMatrix(train, label=label)
 
-    params = {"max_depth": args.max_depth, "eta": args.eta, "objective": args.objective}
+    params = {"max_depth": args.max_depth, "eta": args.eta, "objective": args.objective, "gamma": args.gamma, "min_child_weight": args.min_child_weight, "subsample": args.subsample }
     num_boost_round = args.num_round
     nfold = args.nfold
     early_stopping_rounds = args.early_stopping_rounds
@@ -49,22 +52,30 @@ if __name__ == "__main__":
         num_boost_round=num_boost_round,
         nfold=nfold,
         early_stopping_rounds=early_stopping_rounds,
-        metrics=("auc"),
+        metrics=["rmse","mae"],
         seed=0,
     )
 
-    print(f"[0]#011train-auc:{cv_results.iloc[-1]['train-auc-mean']}")
-    print(f"[1]#011validation-auc:{cv_results.iloc[-1]['test-auc-mean']}")
+    print(f"[0]#011train-rmse:{cv_results.iloc[-1]['train-rmse-mean']}")
+    print(f"[1]#011validation-rmse:{cv_results.iloc[-1]['test-rmse-mean']}")
 
     metrics_data = {
-        "binary_classification_metrics": {
-            "validation:auc": {
-                "value": cv_results.iloc[-1]["test-auc-mean"],
-                "standard_deviation": cv_results.iloc[-1]["test-auc-std"],
+        "regression_metrics": {
+            "validation:rmse": {
+                "value": cv_results.iloc[-1]["test-rmse-mean"],
+                "standard_deviation": cv_results.iloc[-1]["test-rmse-std"],
             },
-            "train:auc": {
-                "value": cv_results.iloc[-1]["train-auc-mean"],
-                "standard_deviation": cv_results.iloc[-1]["train-auc-std"],
+            "train:rmse": {
+                "value": cv_results.iloc[-1]["train-rmse-mean"],
+                "standard_deviation": cv_results.iloc[-1]["train-rmse-std"],
+            },
+            "validation:mae": {
+                "value": cv_results.iloc[-1]["test-mae-mean"],
+                "standard_deviation": cv_results.iloc[-1]["test-mae-std"],
+            },
+            "train:mae": {
+                "value": cv_results.iloc[-1]["train-mae-mean"],
+                "standard_deviation": cv_results.iloc[-1]["train-mae-std"],
             },
         }
     }

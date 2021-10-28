@@ -45,21 +45,20 @@ def create_pipeline(
 
     datafreshness_func_arn = kwargs["datafreshness_func_arn"]
     create_dataset_script_path = kwargs["create_dataset_script_path"]
-    customers_fg_name = kwargs["customers_fg_name"]
-    claims_fg_name = kwargs["claims_fg_name"]
+    nyctaxi_fg_name = kwargs["nyctaxi_fg_name"]
     features_names = kwargs["features_names"]
 
 
     model_package_group_name = kwargs["model_package_group_name"]
 
-    customer_fg = client.describe_feature_group(FeatureGroupName=customers_fg_name)
-    claims_fg = client.describe_feature_group(FeatureGroupName=claims_fg_name)
-    database_name = customer_fg["OfflineStoreConfig"]["DataCatalogConfig"]["Database"]
-    claims_table = claims_fg["OfflineStoreConfig"]["DataCatalogConfig"]["TableName"]
-    customers_table = customer_fg["OfflineStoreConfig"]["DataCatalogConfig"][
+    nyctaxi_fg = client.describe_feature_group(FeatureGroupName=nyctaxi_fg_name)
+
+    database_name = nyctaxi_fg["OfflineStoreConfig"]["DataCatalogConfig"]["Database"]
+
+    nyctaxi_table = nyctaxi_fg["OfflineStoreConfig"]["DataCatalogConfig"][
         "TableName"
     ]
-    catalog = customer_fg["OfflineStoreConfig"]["DataCatalogConfig"]["Catalog"]
+    catalog = nyctaxi_fg["OfflineStoreConfig"]["DataCatalogConfig"]["Catalog"]
 
     model_package_arn = get_model_package_arn(model_package_group_name)
     model = ModelPackage(model_package_arn=model_package_arn, role=role)
@@ -82,11 +81,10 @@ def create_pipeline(
         sagemaker_session=sagemaker_session,
     )
 
-    batch_transform_columns_string = "claims.policy_id," + ", ".join(f'"{c}"' for c in features_names)
+    batch_transform_columns_string = "nyctaxi.FS_ID," + ", ".join(f'"{c}"' for c in features_names)
     query_string = f"""
     SELECT DISTINCT {batch_transform_columns_string}
-        FROM "{claims_table}" claims LEFT JOIN "{customers_table}" customers
-        ON claims.policy_id = customers.policy_id
+        FROM "{nyctaxi_table}" nyctaxi
     """
     # WHERE claims.fraud is NULL
 
