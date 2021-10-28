@@ -1,0 +1,64 @@
+{
+  "event_time_feature_name": "FS_time",
+  "feature_group_name": "nyctaxi",
+  "record_identifier_feature_name": "FS_ID",
+  "offline_store_config": {
+    "DisableGlueTableCreation": false,
+    "S3StorageConfig": {
+      "S3Uri": "s3_uri"
+    }
+  },
+  "online_store_config": {
+    "EnableOnlineStore": false
+  },
+  "column_schemas": [
+    {
+        "name": "fare_amount",
+        "type": "float"
+    },
+    {
+        "name": "passenger_count",
+        "type": "long"
+    },
+    {
+        "name": "pickup_latitude",
+        "type": "float"
+    },
+    {
+        "name": "pickup_longitude",
+        "type": "float"
+    },
+    {
+        "name": "dropoff_latitude",
+        "type": "float"
+    },
+    {
+        "name": "dropoff_longitude",
+        "type": "float"
+    },
+    {
+        "name": "geo_distance",
+        "type": "float"
+    },
+    {
+        "name": "hour",
+        "type": "long"
+    },
+    {
+        "name": "weekday",
+        "type": "long"
+    },
+    {
+        "name": "month",
+        "type": "long"
+    },
+        {
+        "name": "FS_ID",
+        "type": "long"
+    },
+    {
+        "name": "FS_time",
+        "type": "float"
+    }
+  ]
+}

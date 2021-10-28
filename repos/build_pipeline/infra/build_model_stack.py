@@ -10,6 +10,9 @@ from aws_cdk import aws_iam as iam
 from aws_cdk import aws_sagemaker as sagemaker
 from aws_cdk import aws_ssm as ssm
 from aws_cdk import core as cdk
+from aws_cdk import aws_lambda as lambda_
+from aws_cdk import aws_lambda_python as lambda_python
+from aws_cdk import aws_s3 as s3
 
 from infra.sm_pipeline_utils import generate_pipeline_definition, get_pipeline_props
 
@@ -20,6 +23,7 @@ project_id = os.getenv("SAGEMAKER_PROJECT_ID")
 sagemaker_execution_role_arn = os.getenv("SAGEMAKER_PIPELINE_ROLE_ARN")
 sm_studio_user_role_arn = os.getenv("SAGEMAKER_STUDIO_USER_ROLE_ARN")
 events_role_arn = os.getenv("LAMBDA_ROLE_ARN")
+lambda_role_arn = os.getenv("LAMBDA_ROLE_ARN")
 
 logger = logging.getLogger()
 
@@ -42,6 +46,18 @@ class BuildModelStack(cdk.Stack):
         eventbridge_role = iam.Role.from_role_arn(
             self, "EventBridgeRole", role_arn=events_role_arn
         )
+        
+        lambda_role = iam.Role.from_role_arn(
+            self, "LambdaRole", role_arn=lambda_role_arn
+        )
+        
+        sagemaker_execution_role = iam.Role.from_role_arn(
+            self, "SageMakerExecutionRole", role_arn=sagemaker_execution_role_arn
+        )
+        
+        project_bucket = s3.Bucket.from_bucket_name(
+            self, "ProjectBucket", bucket_name=project_bucket_name
+        )
 
         if not isinstance(configuration_path, Path):
             configuration_path = Path(configuration_path)
@@ -51,7 +67,26 @@ class BuildModelStack(cdk.Stack):
             pipeline_props = get_pipeline_props(k)
 
             pipeline_name = f"{project_name}-{pipeline_props['pipeline_name']}"
+            
+            # Create lambda function to check model metric
+            evaluation_lambda = lambda_python.PythonFunction(
+                self,
+                f"{pipeline_name}Evaluation",
+                function_name=f"{pipeline_name}-Evaluation",
+                description=f"Get model evaluation metrics for {pipeline_name}",
+                entry="lambdas/functions/evaluation",
+                index="lambda_function.py",
+                handler="lambda_handler",
+                runtime=lambda_.Runtime.PYTHON_3_8,
+                timeout=cdk.Duration.seconds(120),
+                role=lambda_role
+            )
+            project_bucket.grant_read(evaluation_lambda)
+            
+            evaluation_lambda.grant_invoke(sagemaker_execution_role)
+            
             pipeline_conf = pipeline_props["pipeline_configuration"]
+            pipeline_conf["evaluation_func_arn"] = evaluation_lambda.function_arn
             try:
                 logger.info(f"Generating pipeline definition for {pipeline_name}")
                 pipeline_definition = generate_pipeline_definition(
